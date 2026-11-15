@@ -172,9 +172,14 @@ endif()
 # nvngx_dlss.dll runtime are downloaded one by one from NVIDIA's DLSS repository at the tag's commit (the tag's archive
 # carries every platform's binaries, about 1 GB), each checked against its SHA-256, into the build folder: never
 # committed. The dll goes beside each exe. XBE_DLSS=OFF, or a failed download, builds without it (DLSS not available).
+# Windows and x86-64 Linux (NVIDIA's libnvidia-ngx-dlss.so); not macOS or Android, where there is no NVIDIA GPU.
 option(XBE_DLSS "Fetch NVIDIA's DLSS SDK (NVIDIA RTX SDKs licence) and build the DLSS upscaler" ON)
 set(XBE_DLSS_FOUND OFF)
-if(XBE_DLSS AND WIN32)
+set(XBE_DLSS_LINUX OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    set(XBE_DLSS_LINUX ON)
+endif()
+if(XBE_DLSS AND (WIN32 OR XBE_DLSS_LINUX))
     set(XBE_DLSS_TAG v310.9.16)
     set(XBE_DLSS_COMMIT 9981c6350dc58c0ce21f024fd65e31e851c31689)
     set(XBE_DLSS_DIR ${CMAKE_BINARY_DIR}/_deps/dlss-${XBE_DLSS_TAG})
@@ -189,9 +194,16 @@ if(XBE_DLSS AND WIN32)
         include/nvsdk_ngx_loader.h abdf5f66a692620538357d29fdf78e3e2a677ee8140b7a638962ecb766585e75
         include/nvsdk_ngx_params.h 943bc8cc5cdae03b6303016fbad3183636f2335ae27a2d18776798c3b4efabbc
         include/nvsdk_ngx_vk.h 2d364ce7132881eb669e9498fd570d74cba563b1fbebc82c235f8e1ad2dd8b6d
-        lib/Windows_x86_64/x64/nvsdk_ngx_d.lib bc43df9ec032004fde681d3e3afd01cde239e03a0125b822e88674c84287f99c
-        lib/Windows_x86_64/rel/nvngx_dlss.dll d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e
         LICENSE.txt d4216e39ebef5f9b50a6712ebb37beeb5379862a67733a9999c651f21592aaf0)
+    if(WIN32)
+        list(APPEND XBE_DLSS_FILES
+            lib/Windows_x86_64/x64/nvsdk_ngx_d.lib bc43df9ec032004fde681d3e3afd01cde239e03a0125b822e88674c84287f99c
+            lib/Windows_x86_64/rel/nvngx_dlss.dll d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e)
+    else()
+        list(APPEND XBE_DLSS_FILES
+            lib/Linux_x86_64/libnvsdk_ngx.a d3c50bb0d9624fc35e502a8e929b8fc1e2b505017ebdb84c0d5b627e11a235df
+            lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.310.9.16 30982c937afed85c96b8d313323de9a650a2eec6de1bb0f714b21750f4ce98f6)
+    endif()
     set(XBE_DLSS_FOUND ON)
     list(LENGTH XBE_DLSS_FILES n)
     math(EXPR last "${n} - 1")
@@ -224,8 +236,13 @@ if(XBE_DLSS AND WIN32)
         endif()
     endforeach()
     if(XBE_DLSS_FOUND)
-        set(XBE_DLSS_LIB ${XBE_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib)
-        set(XBE_DLSS_DLL ${XBE_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll)
+        if(WIN32)
+            set(XBE_DLSS_LIB ${XBE_DLSS_DIR}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib)
+            set(XBE_DLSS_DLL ${XBE_DLSS_DIR}/lib/Windows_x86_64/rel/nvngx_dlss.dll)
+        else()
+            set(XBE_DLSS_LIB ${XBE_DLSS_DIR}/lib/Linux_x86_64/libnvsdk_ngx.a)
+            set(XBE_DLSS_DLL ${XBE_DLSS_DIR}/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.310.9.16)
+        endif()
         message(STATUS "DLSS SDK ${XBE_DLSS_TAG} (NVIDIA RTX SDKs licence): DLSS built in")
     endif()
 endif()
@@ -285,8 +302,7 @@ set(XBE_IMGUI_SOURCES
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 if(WIN32)
-    list(APPEND XBE_IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
+    list(APPEND XBE_IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp)
 else()
     # off Windows the window is SDL's (app/main_sdl.cpp); imgui 1.91.0's backend still names SDL_TRUE / SDL_FALSE
     list(APPEND XBE_IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp)
@@ -311,12 +327,12 @@ set_source_files_properties(${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp PR
 
 file(GLOB XBE_RUNTIME_SOURCES CONFIGURE_DEPENDS ${XBE_SDK_DIR}/runtime/*/*.cpp)
 if(NOT WIN32)
-    # Windows only: the Direct3D renderers, XAudio2, the DirectInput wheel (input.cpp stubs it) and the Win32 window
-    list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/(gpu/d3d12|gpu/d3d11|audio/xaudio2|core/wheel|app/main)\\.cpp$")
+    # Windows only: XAudio2, the DirectInput wheel (input.cpp stubs it) and the Win32 window
+    list(FILTER XBE_RUNTIME_SOURCES EXCLUDE REGEX "/runtime/(audio/xaudio2|core/wheel|app/main)\\.cpp$")
 endif()
 # SDL's headers go to the files that use SDL alone (it is linked LINK_ONLY), so the generated sources' compile line stays
 # the same
-foreach(f core/input.cpp app/main_sdl.cpp app/touch.cpp audio/sdl.cpp)
+foreach(f core/input.cpp app/main_sdl.cpp app/touch.cpp app/splash.cpp audio/sdl.cpp)
     set_source_files_properties(${XBE_SDK_DIR}/runtime/${f} PROPERTIES INCLUDE_DIRECTORIES "${sdl3_SOURCE_DIR}/include")
 endforeach()
 if(WIN32)
@@ -446,7 +462,7 @@ function(xbe_runtime_target target)
         target_compile_definitions(${target} PRIVATE XBE_GLSLANG)
     endif()
     if(WIN32)
-        target_link_libraries(${target} PRIVATE d3d12 d3d11 dinput8 dxgi dxguid d3dcompiler xaudio2 ole32 windowscodecs dbghelp winmm dwmapi ws2_32)
+        target_link_libraries(${target} PRIVATE dinput8 dxgi dxguid xaudio2 ole32 windowscodecs dbghelp winmm dwmapi ws2_32)
     else()
         # the few Win32 and Winsock names portable sources use, and the D3D ones the shared renderer code names
         target_include_directories(${target} PRIVATE ${XBE_SDK_DIR}/runtime/compat)

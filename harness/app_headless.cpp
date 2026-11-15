@@ -124,4 +124,14 @@ void Pace(uint32_t vblanks) {
 
 void MixHitSound(float*, uint32_t) {}  // no hit marker ticks (app/hit_marker.cpp) headless
 
+// the window's names core/netplay.cpp and the renderers ask for: no window here
+std::string Utf8(const wchar_t* w) {
+    std::string s;
+    for (; w && *w; w++) s += *w < 0x80 ? char(*w) : '?';
+    return s;
+}
+void SetWindowTitle(const std::string&) {}
+uint32_t RefreshRate() { return 0; }
+void DisplayLuminance(float& peak, float& paper) { peak = paper = 0; }
+
 }  // namespace app

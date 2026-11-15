@@ -1026,6 +1026,10 @@ UINT ScaleUnsigned(int32_t v, float sc) { return UINT(uint32_t(v) * sc); }
 // world (rhw about 0.01) and stay.
 // depth on with a comparison that can fail (PGR1 draws its HUD with depth on and the comparison ALWAYS)
 bool PresentUnsynced() {
+#ifndef _WIN32
+    // the window thread reads the display's rate once the window is up: until then 0, asked again rather than kept
+    if (!std::getenv("XBE_VSYNC_ALWAYS") && app::RefreshRate() == 0) return false;
+#endif
     static const bool uneven = [] {
 #ifdef _WIN32
         DEVMODEW display{};
@@ -1035,7 +1039,10 @@ bool PresentUnsynced() {
         if (u) LOGR("display: %u Hz is not a multiple of 60: frames are presented when paced, not at a refresh", unsigned(display.dmDisplayFrequency));
         return u;
 #else
-        return false;
+        const uint32_t hz = std::getenv("XBE_VSYNC_ALWAYS") ? 0 : app::RefreshRate();  // the window's display (SDL's)
+        const bool u = hz > 60 && hz % 60 != 0;
+        if (u) LOGR("display: %u Hz is not a multiple of 60: frames are presented when paced, not at a refresh", hz);
+        return u;
 #endif
     }();
     return uneven && app::Get().fps_cap != 0;

@@ -505,13 +505,6 @@ void Graphics(Settings& s) {
         s.fps_cap = uint32_t(caps[c]);
         Save();
     }
-    int ms = int(s.msaa % 4);
-    const char* ms_names[] = {"Off", "2x", "4x", "8x"};
-    if (RowChoice("MSAA", &ms, ms_names, 4, "Smooths the edges of the 3D scene; applies at once.")) {
-        s.msaa = uint32_t(ms);
-        Save();
-    }
-    if (RowCheck("Smooth alpha edges", &s.alpha_coverage, "With MSAA on: softens fences, leaves and other cut-out textures, which MSAA alone misses. A dark outline on some is possible.")) Save();
     int edge = s.smaa ? 2 : s.fxaa ? 1 : 0;
     const char* edge_names[] = {"Off", "FXAA", "SMAA"};
     if (RowChoice("Edge smoothing", &edge, edge_names, 3, "On the finished frame, HUD included. SMAA keeps more detail than FXAA, and costs a little more.")) {
@@ -672,14 +665,6 @@ void Graphics(Settings& s) {
     if (RowCheck("Performance overlay", &s.perf_overlay, "A corner panel: frames a second, the frame time and a graph of the last two seconds, the size the 3D scene is drawn at.")) Save();
     if (kGame.sharpen_2d && RowCheck("Sharp text and HUD", &s.sharp_2d)) Save();
     if (kGame.style_from_settings) FxRows(s);
-    if (!kGame.vulkan_only) {
-        int renderer = int(s.renderer % 3);
-        const char* renderers[] = {"Direct3D 12", "Direct3D 11", "Vulkan (experimental)"};
-        if (RowChoice("Renderer", &renderer, renderers, 3, "Applies at the next start; Direct3D 11 for GPUs or drivers where 12 runs badly; Vulkan falls back to Direct3D 12 when it cannot start.")) {
-            s.renderer = uint32_t(renderer);
-            Save();
-        }
-    }
 }
 
 void General(Settings& s) {

@@ -21,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <climits>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdio>
@@ -44,6 +45,7 @@
 #include "gpu/backend.h"
 #include "image_symbols.h"
 #include "kernel/kernel.h"
+#include "kernel/memory.h"
 
 namespace app {
 
@@ -133,16 +135,6 @@ void OnCrash(int sig, siginfo_t* info, void*) {
     std::raise(sig);
 }
 
-void DumpThreads() {
-    LOGR("F3: thread stacks%s", diag::CaptureDir().empty() ? " (no capture: XBE_CAPTURE_DIR is not set)" : ", the next frame captured");
-    gpu::g_capture = true;
-    for (auto& t : kernel::Threads())
-        if (t->ctx) {
-            LOGR("F3: thread %X", t->id);
-            kernel::LogGuestStack(*t->ctx, 32);
-        }
-}
-
 // the monitor setting's display (the primary one when it is gone)
 SDL_DisplayID Display() {
     SDL_DisplayID id = 0;
@@ -156,7 +148,9 @@ SDL_DisplayID Display() {
 }
 
 // window thread only: the window's mode, size and place from the settings
+void ReadRefreshRate();
 void ApplyNow() {
+    struct Reread { ~Reread() { ReadRefreshRate(); } } reread;  // the display may have changed with the mode or place
     const Settings& s = Get();
     SDL_DisplayID display = Display();
     Mode out = Output();
@@ -220,6 +214,12 @@ void UpdateMouse() {
     static SDL_Cursor* shown = nullptr;
     bool want = input::MouseLooking();
     if (want != relative && SDL_SetWindowRelativeMouseMode(g_window, want)) relative = want;
+    // in play with the pointer not free (as app/main.cpp's): no pointer over the game, only over the settings window
+    static bool hidden = false;
+    bool hide = !want && !OverlayOpen() && !input::MouseIsFree();
+    if (hide != hidden) {
+        if (hide ? SDL_HideCursor() : SDL_ShowCursor()) hidden = hide;
+    }
     SDL_Cursor* c = nullptr;
     if (!want && kGame.menu_up && kGame.menu_up() && !OverlayOpen()) c = MenuCursor();
     if (!c) c = SDL_GetDefaultCursor();
@@ -251,6 +251,7 @@ bool HandleEvent(const SDL_Event& e) {
             if (r->apply) ApplyNow();
             SDL_ShowWindow(g_window);
             SDL_RaiseWindow(g_window);
+            ReadRefreshRate();
             std::lock_guard lock(r->lock);
             r->done = true;
             r->cv.notify_all();
@@ -269,6 +270,8 @@ bool HandleEvent(const SDL_Event& e) {
                 int dx = int(fx), dy = int(fy);
                 fx -= float(dx), fy -= float(dy);
                 if (dx || dy) input::MouseMoved(dx, dy);
+            } else if (int travel = int(std::abs(e.motion.xrel) + std::abs(e.motion.yrel))) {
+                input::PointerTravel(travel);  // the mouse in use: keyboard and mouse prompts (as WM_MOUSEMOVE's)
             }
             break;
         case SDL_EVENT_MOUSE_WHEEL:
@@ -296,6 +299,11 @@ bool HandleEvent(const SDL_Event& e) {
             }
             if (OverlayKey(vk)) return true;
             if (vk == VK_F3) DumpThreads();
+            if (vk == VK_F8 && !diag::g_f8_pressed) {
+                LOGR("F8: experiments set to start now begin");
+                diag::g_f8_pressed = true;
+            }
+            if (vk == Get().screenshot_key && !e.key.repeat) RequestScreenshot();
             if (vk == VK_F4) {
                 LOGR("F4: frame log requested");
                 diag::g_framelog_request = true;
@@ -422,72 +430,40 @@ bool Paused() {
 bool Backgrounded() { return g_background; }
 uint32_t SurfaceGeneration() { return g_surface_generation; }
 
-static void (*g_mid_frame)() = nullptr;
-void SetMidFrame(void (*fn)()) { g_mid_frame = fn; }
-
-// as app/main.cpp's
-void Pace(uint32_t vblanks) {
-    using clock = std::chrono::steady_clock;
-    static clock::time_point next = clock::now();
-    if (Paused()) {
-        LOGR("paused: the window is not in front");
-        while (Paused()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        LOGR("resumed");
-        next = clock::now();
-    }
-    uint32_t cap = PaceRate(Get().fps_cap, vblanks);
-    auto now = clock::now();
-    if (!cap) {  // NF_UNCAPPED=1 (diagnostic): the frame's work time, averaged over 10 s
-        static clock::time_point last_u = now, report_u = now + std::chrono::seconds(10);
-        static double work_u = 0;
-        static uint32_t n_u = 0;
-        work_u += std::chrono::duration<double, std::milli>(now - last_u).count(), n_u++;
-        last_u = now;
-        if (now >= report_u && n_u) {
-            LOGR("frames uncapped: %.2f ms a frame on average (%.0f a second)", work_u / n_u, 1000.0 * n_u / work_u);
-            work_u = 0, n_u = 0, report_u = now + std::chrono::seconds(10);
-        }
-        next = now;
-        return;
-    }
-    auto period = std::chrono::nanoseconds(1000000000ull / cap);
-    static clock::time_point last = now, report = now + std::chrono::seconds(10);
-    static uint32_t frames = 0, slow = 0;
-    static double longest = 0;
-    double took = std::chrono::duration<double, std::milli>(now - last).count();
-    last = now;
-    frames++;
-    if (took > 1.5 * std::chrono::duration<double, std::milli>(period).count()) slow++, longest = std::max(longest, took);
-    if (now >= report) {
-        uint32_t compiled = gpu::g_shaders_compiled.exchange(0);
-        if (slow) LOGR("frames: %u of %u in the last 10 s over %.1f ms (%u a second paced), the longest %.1f ms; "
-                       "%u shaders compiled", slow, frames, 1.5 * std::chrono::duration<double, std::milli>(period).count(),
-                       cap, longest, compiled);
-        if (slow) logx::Flush();
-        report = now + std::chrono::seconds(10);
-        frames = slow = 0;
-        longest = 0;
-    }
-    next += period;
-    if (next < now - period) next = now;
-    if (g_mid_frame) g_mid_frame();
-    // NF_PERF_WORK (the capped run): the frame's work, the period less the time this frame's pacing waits
-    static double waited_last = 0, work_sum = 0;
-    static uint32_t work_n = 0;
-    static clock::time_point work_report = now + std::chrono::seconds(10);
-    work_sum += took - waited_last, work_n++;
-    if (now >= work_report && work_n) {
-        LOGR("frame work: %.2f ms a frame on average (paced at %u a second)", work_sum / work_n, cap);
-        work_sum = 0, work_n = 0, work_report = now + std::chrono::seconds(10);
-    }
-    const auto wait_from = clock::now();
-    while (clock::now() + std::chrono::milliseconds(2) < next) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    while (clock::now() < next) std::this_thread::yield();
-    waited_last = std::chrono::duration<double, std::milli>(clock::now() - wait_from).count();
-    netplay::Frame();
+void SetWindowTitle(const std::string& utf8) {
+    if (!g_window) return;
+    auto* text = new std::string(utf8);
+    SDL_RunOnMainThread([](void* p) {
+        auto* t = static_cast<std::string*>(p);
+        if (g_window) SDL_SetWindowTitle(g_window, t->c_str());
+        delete t;
+    }, text, false);
 }
 
 // ---- the displays (settings.cpp's on Windows)
+
+// read on the window thread (SDL's video calls belong there) when the window is set up, and kept for any thread
+namespace {
+std::atomic<uint32_t> g_refresh{0};
+void ReadRefreshRate() {
+    const SDL_DisplayMode* m = g_window ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(g_window)) : nullptr;
+    g_refresh = m && m->refresh_rate > 1 ? uint32_t(m->refresh_rate + 0.5f) : 0;
+}
+}  // namespace
+uint32_t RefreshRate() { return g_refresh; }
+
+// SDL's HDR properties of the window: SDR white relative to 80 nits (scRGB's 1.0) and the headroom above it. Only
+// trusted with HDR on (headroom past 1) and a white level reported (Apple's EDR always says 1.0: left to the defaults)
+void DisplayLuminance(float& peak, float& paper) {
+    peak = paper = 0;
+    if (!g_window) return;
+    SDL_PropertiesID props = SDL_GetWindowProperties(g_window);
+    float white = SDL_GetFloatProperty(props, SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, 1.0f);
+    float headroom = SDL_GetFloatProperty(props, SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 1.0f);
+    if (headroom <= 1.001f || white <= 1.001f) return;
+    paper = white * 80.0f;
+    peak = paper * headroom;
+}
 
 void* Monitor() { return reinterpret_cast<void*>(uintptr_t(Display())); }
 

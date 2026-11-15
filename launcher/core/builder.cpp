@@ -917,8 +917,11 @@ bool Builder::Install(std::string& error) {
     bool any = false;
     for (const auto& e : fs::directory_iterator(out, ec)) {
         std::string ext = Lower(U8(e.path().extension()));
-        // the exes (".exe", none on Linux) and the libraries beside them (dxcompiler, DLSS; libdxcompiler.so)
-        const bool exe = ext == Lower(platform_.ExeSuffix()), lib = ext == ".dll" || ext == ".so" || ext == ".dylib";
+        // the exes (".exe", none on Linux) and the libraries beside them (dxcompiler, DLSS; libdxcompiler.so, and
+        // versioned ones as libnvidia-ngx-dlss.so.310.9.16)
+        const std::string file = Lower(U8(e.path().filename()));
+        const bool exe = ext == Lower(platform_.ExeSuffix()),
+                   lib = ext == ".dll" || ext == ".so" || ext == ".dylib" || file.find(".so.") != std::string::npos;
         if (!e.is_regular_file(ec) || (!exe && !lib)) continue;
         std::string name = Lower(U8(e.path().stem()));
         // the game's exes (GameConfig::exes); the build's own tools (xbe_recomp) stay

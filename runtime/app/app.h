@@ -142,7 +142,7 @@ struct Settings {
     uint32_t contrast = 100;         // screen contrast in percent
     uint32_t saturation = 100;       // colour saturation in percent
     int32_t temperature = 0;         // colour temperature, -100 cool to 100 warm
-    uint32_t renderer = 0;           // 0 Direct3D 12, 1 Direct3D 11, 2 Vulkan, at the next start
+    uint32_t renderer = 2;           // 2 Vulkan, the only renderer (0 and 1 were Direct3D 12 and 11)
     uint32_t language = 1;           // the console's language (XC_LANGUAGE, GameInfo::languages), at the next start
     // a steering wheel and its kit (core/wheel.cpp), playing as controller 1: each control on any DirectInput device,
     // named by the device (and its instance, telling two of the same apart), then an axis (0-7: X Y Z Rx Ry Rz,
@@ -230,8 +230,6 @@ std::vector<Mode> ListModes();        // the monitor setting's display modes, wi
 bool Paused();                    // pause_unfocused and the window is not in front (Windows)
 // F12: the renderers save the next frame, before they draw the interface (app/screenshot.cpp)
 void RequestScreenshot();
-bool TakeScreenshotRequest();
-void SaveScreenshot(std::vector<uint8_t> bgra, uint32_t w, uint32_t h);
 bool ScreenshotJustSaved();  // for a few seconds after one is written
 void DrawHud(double fps);         // the frame counter, inside the ImGui frame (overlay.cpp)
 // the runtime's own drawing over the frame (the frame counter, hit markers, blood, unlock pop-ups) left out while
@@ -311,6 +309,10 @@ void WindowPixels(uint32_t& width, uint32_t& height);  // the window's drawable 
 bool Backgrounded();
 uint32_t SurfaceGeneration();
 std::vector<Mode> DisplayModes();  // the monitor setting's display's fullscreen sizes, widest first, each once
+uint32_t RefreshRate();  // the window's display's refresh rate in Hz, 0 when unknown
+void SetWindowTitle(const std::string& utf8);  // any thread (the window thread sets it)
+// the window's display in HDR: its peak brightness and the one it shows SDR white at, in nits; 0 where unknown
+void DisplayLuminance(float& peak, float& paper);
 std::string Utf8(const wchar_t* w);  // a wide string (kGame's, UTF-32 here) as UTF-8
 // a message box over the game window (SDL's); yes_no: Yes and No buttons, true for Yes, else OK and true
 bool MessageBox(const wchar_t* text, bool error, bool yes_no = false);
@@ -472,8 +474,7 @@ struct GameInfo {
     // the pointer's picture in the menus: size x size premultiplied B8G8R8A8 pixels for a cursor that many pixels
     // high, and its hot spot; none, the system's arrow
     void (*menu_cursor)(int size, std::vector<uint32_t>& bgra, int& hot_x, int& hot_y) = nullptr;
-    // Vulkan always (Settings::renderer held at 2, the settings window's Renderer choice not shown): a title whose
-    // look is Vulkan's. Direct3D 12 still starts in its place on a PC where Vulkan cannot
+    // kept for the titles that set it: Vulkan is now the only renderer everywhere
     bool vulkan_only = false;
     // the picture's look from the settings' own fields (Settings::fx, color_style, bloom ... : a title whose menus set
     // them, Agent Under Fire) handed to gpu::Style() at load and each save, in place of graphics.toml's
@@ -495,6 +496,7 @@ extern const GameInfo kGame;
 // sleeps out the rest of the frame: the title's present interval (vertical blanks a frame at 60 Hz, 0 unpaced)
 // within the fps cap
 void Pace(uint32_t vblanks = 1);
+void DumpThreads();  // F3: the guest threads' stacks in the log, and guest memory with XBE_CAPTURE_DIR (app/shared.cpp)
 // called by Pace after each present: the renderer's in-between frame (smooth turning), drawn half way to the next
 void SetMidFrame(void (*fn)());
 // frames a second for a title asking for vblanks within cap (0 unlimited); 0 unpaced

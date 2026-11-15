@@ -86,13 +86,9 @@ private:
     uint32_t fence_ = 0;
 };
 
+// the renderer: Vulkan on every platform (gpu/vulkan.cpp; the headless harness has a null one)
 std::unique_ptr<Backend> CreateBackend();
-// Windows: the Direct3D 11 renderer, which CreateBackend returns when the settings ask for it
-std::unique_ptr<Backend> CreateD3D11Backend();
-// Windows: the Vulkan renderer (renderer = "vulkan"), optional: it falls back to Direct3D 12 when it cannot start
 std::unique_ptr<Backend> CreateVulkanBackend();
-// another renderer to try when the first one's Init fails (Direct3D 11 after 12, 12 after Vulkan), null when there is none
-std::unique_ptr<Backend> CreateFallbackBackend();
 // the same backend driven from a thread of its own: calls return once recorded
 std::unique_ptr<Backend> CreateThreadedBackend(std::unique_ptr<Backend> inner);
 // in-between frames for a title drawing one frame a step (GameInfo::step_interpolation)
@@ -111,9 +107,7 @@ inline std::atomic<uint64_t> g_perf_fence_ops[6] = {};
 inline std::atomic<uint64_t> g_perf_delay_ns{0}, g_perf_delay_jitter_ns{0}, g_perf_delays{0};
 inline std::atomic<uint64_t> g_perf_wait_kind_ns[6];  // read-back, resource, fence, flush, copy, next frame
 inline std::atomic<uint64_t> g_perf_sync_late{0}, g_perf_sync_block{0};  // read-backs the title waited for, by cause
-inline std::atomic<uint32_t> g_shaders_compiled{0};  // D3DCompile calls (the shader cache missed), for the frames lines
+inline std::atomic<uint32_t> g_shaders_compiled{0};  // shaders compiled (the shader cache missed), for the frames lines
 
-// F3: save the next frame, every draw and target, under diag::CaptureDir
-inline std::atomic<bool> g_capture{false};
 
 }  // namespace gpu

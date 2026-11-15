@@ -1,6 +1,6 @@
 // NVIDIA DLSS Super Resolution for the Vulkan renderer (gpu/upscale.h), through NVIDIA's NGX SDK: its headers and
 // static loader library fetched by CMake (XBE_DLSS, NVIDIA RTX SDKs licence, sdk/THIRD_PARTY.txt), the model in
-// nvngx_dlss.dll beside the exe, run by the NVIDIA driver on RTX GPUs. Without the SDK (XBE_DLSS off or its download
+// nvngx_dlss.dll (Linux: libnvidia-ngx-dlss.so.<version>) beside the exe, run by the NVIDIA driver on RTX GPUs. Without the SDK (XBE_DLSS off or its download
 // failed) this file builds the stubs below and DLSS shows as not available.
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
@@ -8,13 +8,12 @@
 #include <atomic>
 #include <chrono>
 
+#include "app/app.h"
 #include "core/log.h"
 #include "gpu/upscale.h"
 
 #if XBE_DLSS
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
+#include <string>
 
 #include <cstdlib>
 #include <cstring>
@@ -53,13 +52,7 @@ constexpr char kEngineVersion[] = "1.0";
 
 // the exe's folder: where nvngx_dlss.dll is looked for, and NGX's data path
 const std::wstring& ExeDir() {
-    static const std::wstring dir = [] {
-        wchar_t buf[MAX_PATH * 2] = {};
-        DWORD n = GetModuleFileNameW(nullptr, buf, DWORD(std::size(buf)));
-        std::wstring s(buf, n);
-        size_t slash = s.find_last_of(L"\\/");
-        return slash == std::wstring::npos ? std::wstring(L".") : s.substr(0, slash);
-    }();
+    static const std::wstring dir = app::ExeDir().wstring();
     return dir;
 }
 

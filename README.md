@@ -1,6 +1,6 @@
 # Xbox XBE Recomp
 
-A tool for creating unofficial native PC ports of original Xbox games. Games are statically recompiled from their x86 XBE into native 64 bit Windows executables. The game's x86 code is translated to C++ ahead of time. The Xbox kernel and the XDK libraries (Direct3D 8, DirectSound, XAPI, XNet) are implemented at the API level on Windows. Everything is drawn with a native Direct3D 12 renderer and played through XAudio2.
+A tool for creating unofficial native PC ports of original Xbox games. Games are statically recompiled from their x86 XBE into native 64 bit executables for Windows, Linux, macOS and Android. The game's x86 code is translated to C++ ahead of time. The Xbox kernel and the XDK libraries (Direct3D 8, DirectSound, XAPI, XNet) are implemented at the API level. Everything is drawn with a native Vulkan renderer (MoltenVK on macOS) and played through XAudio2 on Windows and SDL elsewhere.
 
 This tool was originally created for porting [Tom Clancy's Splinter Cell: Double Agent](https://github.com/TGP482/SCDoubleAgent-XBERecomp) and later used to port [BLACK](https://github.com/TGP482/BLACK-XBERecomp)
 
@@ -63,7 +63,7 @@ A new XDK build needs `xdk/<build>/layout.toml` and signatures made from titles 
 
 ### Graphics
 - **Direct3D 8** - Implements Direct3D 8 as the XDK does it, including immediate mode draws, palettes, gamma ramps and Direct3D code built into the game.
-- **Native Direct3D 12 Renderer** - Translates the Xbox's vertex programs, pixel combiners and fixed function pipeline to HLSL, with rendering on its own thread.
+- **Native Vulkan Renderer** - Translates the Xbox's vertex programs, pixel combiners and fixed function pipeline to HLSL, compiled to SPIR-V, with rendering on its own thread.
 - **Ultrawide** - The aspect setting "screen" shows the frame at the screen's shape: screen shaped targets get more pixels across than down, and 2D drawn without a depth test that does not span the frame is squeezed into a centred 16:9 part; the game widens its own 3D views (PGR2: its aspect constant).
 - **Antialiasing** - FXAA on the finished frame, in the final blit, or MSAA 2x, 4x or 8x on the scene: big colour targets and their depth draw into multisampled twins, resolved before anything reads them.
 - **Console Accurate Depth** - Draws W-buffered depth (D3DZB_USEW) from each pixel's perspective correct w, with polygon offsets in its units and the XDK's scale for fixed function and pretransformed vertices; a depth buffer bigger than the colour target serves it, as on the console.
@@ -95,7 +95,7 @@ A new XDK build needs `xdk/<build>/layout.toml` and signatures made from titles 
 
 ### Miscellaneous
 - **Boot Splash** - Place a `splash.png` (or `.bmp`) beside the exe to display a splash screen at launch.
-- **Diagnostics** - Logs frame timing with `XBE_PERF`, captures frames with F3 when `XBE_CAPTURE_DIR` is set (`XBE_CAPTURE_FRAMES`, `XBE_CAPTURE_DRAWS` for several frames or every draw, `XBE_CAPTURE_FULL=1` small targets at their host size), records draws with their input hashes at full speed with F4 (`XBE_FRAMELOG`), leaves out or alters draws by vertex shader (`XBE_DRAW_SKIP`, `XBE_DRAW_TEST`), logs vertex constant writes (`XBE_VSC`), lists the environment's switches at startup and enables the Direct3D 12 debug layer with `XBE_D3D12_DEBUG`.
+- **Diagnostics** - Logs frame timing with `XBE_PERF`, dumps thread stacks and guest memory with F3 when `XBE_CAPTURE_DIR` is set, records draws with their input hashes at full speed with F4 (`XBE_FRAMELOG`), leaves out or alters draws by vertex shader (`XBE_DRAW_SKIP`, `XBE_DRAW_TEST`), logs vertex constant writes (`XBE_VSC`), lists the environment's switches at startup and enables the Vulkan validation layer with `XBE_VK_DEBUG`.
 - **Headless Harness** - Builds and runs a game on Linux without a window, GPU, audio or controller, for testing.
 - **SDK Sync** - Keeps the `sdk/` copies in game repositories in step with this repository.
 

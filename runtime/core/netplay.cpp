@@ -37,6 +37,7 @@
 #include "core/input.h"
 #include "core/http.h"
 #include "core/log.h"
+#include "core/vk_codes.h"
 #include "kernel/kernel.h"
 
 #ifdef _WIN32
@@ -362,20 +363,23 @@ bool Waiting(const std::wstring& text, const std::wstring& more = L"") {
     return true;
 }
 #else
-// off Windows no box: the log says it once
+// off Windows no box (SDL's are modal on the window thread): the window's title says it, and Escape in the window
+// gives up as on Windows
 void WaitOver() { g_wait_over = true; }
 
-std::string Narrow(const std::wstring& w) {
-    std::string s;
-    for (wchar_t c : w) s += c < 0x80 ? char(c) : '?';
-    return s;
-}
-
 bool Waiting(const std::wstring& text, const std::wstring& more = L"") {
+    static std::wstring shown;
+    if (text != shown) {
+        shown = text;
+        app::SetWindowTitle(app::Utf8(app::kGame.title) + " - " + app::Utf8(text.c_str()) + " (Escape plays alone)");
+    }
     if (!g_wait_box.exchange(true))
-        LOGR("netplay: %s%s%s (Escape plays alone)", Narrow(text).c_str(), more.empty() ? "" : "; ", Narrow(more).c_str());
-    if (g_wait_cancel) {
+        LOGR("netplay: %s%s%s (Escape plays alone)", app::Utf8(text.c_str()).c_str(), more.empty() ? "" : "; ",
+             app::Utf8(more.c_str()).c_str());
+    if (g_wait_cancel || input::KeyHeld(VK_ESCAPE)) {
         LOGR("netplay: waiting given up; playing alone");
+        app::SetWindowTitle(app::Utf8(app::kGame.title));
+        shown.clear();
         WaitOver();
         return false;
     }
@@ -679,6 +683,8 @@ bool Start() {
 #ifdef _WIN32
     if (HWND w = static_cast<HWND>(app::Window()))
         SetWindowTextW(w, (std::wstring(app::kGame.title) + L" - player " + std::to_wstring(g_me + 1)).c_str());
+#else
+    app::SetWindowTitle(app::Utf8(app::kGame.title) + " - player " + std::to_string(g_me + 1));
 #endif
     LOGR("netplay: started as player %d of %d, %d frames of input delay, host rules %08X",
          g_me + 1, g_players, g_delay, g_session_rules);

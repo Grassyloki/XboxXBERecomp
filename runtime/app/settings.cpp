@@ -37,8 +37,6 @@ const char* kAspects[] = {"auto", "4:3", "16:9", "screen"};
 constexpr uint32_t kAspectCount = 4;
 const char* kMsaa[] = {"off", "msaa2", "msaa4", "msaa8"};
 constexpr uint32_t kMsaaCount = 4;
-const char* kRenderers[] = {"d3d12", "d3d11", "vulkan"};
-constexpr uint32_t kRendererCount = 3;
 
 #ifdef _WIN32
 // the displays in Windows' order
@@ -320,10 +318,7 @@ void Load() {
     s.contrast = std::clamp<uint32_t>(t["contrast"].value_or(s.contrast), 50, 150);
     s.saturation = std::min<uint32_t>(t["saturation"].value_or(s.saturation), 200);
     s.temperature = int32_t(std::clamp<int64_t>(t["temperature"].value_or(int64_t(s.temperature)), -100, 100));
-    std::string renderer = t["renderer"].value_or(std::string(kRenderers[s.renderer % kRendererCount]));
-    for (uint32_t i = 0; i < kRendererCount; i++)
-        if (renderer == kRenderers[i]) s.renderer = i;
-    if (kGame.vulkan_only) s.renderer = 2;
+    s.renderer = 2;  // Vulkan, the only renderer: an older file's "d3d12" or "d3d11" is read as it
     // the steering wheel: each control a table { device, guid, axis or button, rest, full, invert }; older files gave
     // the wheel's own axes as wheel_steer_axis, pedals as [axis, rest, full] and buttons as numbers
     s.wheel_steer.axis = int32_t(t["wheel_steer_axis"].value_or(int64_t(s.wheel_steer.axis)));
@@ -468,7 +463,7 @@ toml::table Table() {
                   {"contrast", int64_t(s.contrast)},
                   {"saturation", int64_t(s.saturation)},
                   {"temperature", int64_t(s.temperature)},
-                  {"renderer", kRenderers[s.renderer % kRendererCount]},
+                  {"renderer", "vulkan"},
                   {"wheel_range", int64_t(s.wheel_range)},
                   {"wheel_lock", int64_t(s.wheel_lock)},
                   {"wheel_deadzone", int64_t(s.wheel_deadzone)},

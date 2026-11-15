@@ -1,6 +1,5 @@
-// The title's Direct3D 8 calls drawn with Vulkan 1.3 (renderer = "vulkan" in the settings file). The console path of
-// d3d11.cpp on Vulkan, with what does not depend on the API shared through d3d_common (its D3D12 enums translated
-// here). The shaders are d3d_common's and shaders.cpp's HLSL, compiled to SPIR-V by DXC (gpu/dxc.cpp: dxcompiler.dll
+// The title's Direct3D 8 calls drawn with Vulkan 1.3, the only renderer. What does not depend on the API is shared
+// through d3d_common (its D3D12 enums, the renderers' common vocabulary, translated here). The shaders are d3d_common's and shaders.cpp's HLSL, compiled to SPIR-V by DXC (gpu/dxc.cpp: dxcompiler.dll
 // or libdxcompiler.so beside the exe). Vulkan is loaded at run time (vulkan-1.dll; off Windows the loader SDL opened
 // for the window, else libvulkan.so.1): without it Init fails and the fallback renderer takes over. Off Windows the
 // window, its surface and its size come from app/main_sdl.cpp's hooks, and the D3D names d3d_common uses from
@@ -17,7 +16,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <d3dcompiler.h>
+#include <d3dcommon.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
@@ -27,7 +26,7 @@
 #else
 #include <dlfcn.h>
 #include <windows.h>  // runtime/compat's
-#include <d3dcompiler.h>
+#include <d3dcommon.h>
 #include <wrl/client.h>
 
 #define VK_NO_PROTOTYPES
@@ -4087,6 +4086,8 @@ private:
     void Accumulate(Target& rt, Image& cur, Image (&acc)[2], uint64_t& frame, bool distance);
     void TaaPass(Target& rt, Target* ds);
     bool TaaWanted() const;
+    // vsync asked for and not given up for a refresh rate that is no multiple of 60 under a cap (PresentUnsynced)
+    static bool WantVsync() { return app::Get().vsync && !PresentUnsynced(); }
     // temporal upscaler (GraphicsStyle::upscaler, gpu/upscale.h): FSR 2 over the finished scene before the HUD, the
     // scene's targets drawn smaller meanwhile (UpscaleShrink, from its first 3D draw; UpscaleExpand after); what FSR
     // reads beside the scene (kUpscaleHlsl: its depth, the camera's motion) and writes (the screen-sized scene)
@@ -4230,6 +4231,7 @@ private:
     uint64_t rt_skips_[5] = {};  // draws not traced: not the scene, depth not written, not triangles, blended, cut-out
     // SMAA over the scene: its shaders (vs, edges, weights, blend) and lookup textures, made at the first use
     void SmaaPass(Target& rt);
+    bool smaa_ran_ = false;  // SmaaPass finished this frame: the final blit leaves FXAA off over its edges
     bool EnsureSmaa();
     uint64_t smaa_h_[4] = {};
     bool smaa_tried_ = false, smaa_ok_ = false;
@@ -4848,8 +4850,8 @@ static void DisplayLuminance(void* window, float& peak, float& paper) {
     }
 }
 #else
-// off Windows not known: the settings' peak (or 1000 nits) and the default SDR white
-static void DisplayLuminance(void*, float& peak, float& paper) { peak = paper = 0; }
+// off Windows SDL's (app/main_sdl.cpp); 0 where not known: the settings' peak (or 1000 nits) and the default SDR white
+static void DisplayLuminance(void*, float& peak, float& paper) { app::DisplayLuminance(peak, paper); }
 #endif
 
 bool VulkanBackend::CreateSwapchain() {
@@ -4897,7 +4899,7 @@ bool VulkanBackend::CreateSwapchain() {
     vkGetPhysicalDeviceSurfacePresentModesKHR(pd_, surface_, &pn, nullptr);
     std::vector<VkPresentModeKHR> modes(pn);
     vkGetPhysicalDeviceSurfacePresentModesKHR(pd_, surface_, &pn, modes.data());
-    swap_vsync_ = app::Get().vsync;
+    swap_vsync_ = WantVsync();
     present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
     if (!swap_vsync_) {
         for (VkPresentModeKHR m : {VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR})
@@ -4918,6 +4920,8 @@ bool VulkanBackend::CreateSwapchain() {
             dm.dmDisplayFrequency > 1)
             refresh_hz_ = dm.dmDisplayFrequency;
     }
+#else
+    if (uint32_t hz = app::RefreshRate()) refresh_hz_ = hz;  // the window's display (SDL's)
 #endif
     uint32_t images = std::max(caps.minImageCount, 2u);
     if (caps.maxImageCount) images = std::min(images, caps.maxImageCount);
@@ -5731,7 +5735,7 @@ Attachments VulkanBackend::TargetAttachments(Target* rt, Target* ds) const {
     return a;
 }
 
-// which targets the draw goes to (d3d11.cpp BindTargets); the rendering instance opens at the draw
+// which targets the draw goes to; the rendering instance opens at the draw
 bool VulkanBackend::BindTargets(const State& s) {
     bool depth = (s.rs[kRsZEnable] || s.rs[kRsStencilEnable]) && !DepthOnlySampled(s);
     bool shared = s.rt.header && s.zs.header && s.rt.data == s.zs.data;
@@ -5977,7 +5981,8 @@ VkShaderModule VulkanBackend::Compile(const std::string& source, const char* ent
         }
         g_shaders_compiled.fetch_add(1, std::memory_order_relaxed);
         ComPtr<ID3DBlob> keep;
-        if (SUCCEEDED(D3DCreateBlob(code.size() * 4, &keep))) {
+        keep.Attach(NewShaderBlob(code.size() * 4));
+        if (keep) {
             std::memcpy(keep->GetBufferPointer(), code.data(), code.size() * 4);
             KeepShader(hash, keep.Get());
         }
@@ -6130,7 +6135,7 @@ void VulkanBackend::Blit(VkImageView src, const Attachments& a, const VkViewport
                          const float uvrect[4], const BlitOptions& o, VkFormat fmt) {
     uint64_t vh, ph;
     const app::Settings& st = app::Get();
-    const bool final = o.final && (st.fxaa || st.sharpen);
+    const bool final = o.final && (st.fxaa || st.sharpen || st.scale_filter);
     if (!Compile(kBlitHlsl, "vs", "vs_5_0", vh)) return;
     VkShaderModule ps = Compile(kBlitHlsl, final ? "psfinal" : "psmain", "ps_5_0", ph);
     bool use_final = final && ps;
@@ -6138,7 +6143,11 @@ void VulkanBackend::Blit(VkImageView src, const Attachments& a, const VkViewport
     if (!ps) return;
     float c[8] = {uvrect[0], uvrect[1], uvrect[2], uvrect[3], o.gamma ? 1.0f : 0.0f, o.alpha ? 1.0f : 0.0f,
                   float(o.taps), 1.0f};
-    if (use_final) c[5] = st.fxaa ? 1.0f : 0.0f, c[6] = float(std::min<uint32_t>(st.sharpen, 100)) / 100.0f;
+    if (use_final) {
+        // FXAA (bit 0) not over SMAA's edges when SMAA ran this frame; the sharp scaling filter (bit 1)
+        c[5] = float((st.fxaa && !smaa_ran_ ? 1 : 0) | (st.scale_filter ? 2 : 0));
+        c[6] = float(std::min<uint32_t>(st.sharpen, 100)) / 100.0f;
+    }
     VkPipeline p = PassPipeline({vh, ph, fmt, VK_FORMAT_UNDEFINED, o.over ? 1u : 0u, 0});
     VkImageView views[2] = {src, lut_.view};
     FullScreen(p, a, vp, sc, c, 8, views, 2);
@@ -6463,7 +6472,8 @@ VkImageView VulkanBackend::BindGuestTexture(const State& s, int stage, const Tex
                                             DrawTextures& stages) {
     if (!d.cube && d.depth == 1 && !fi.depth && !sky_keeps_game_) {
         auto r = FindReplacement(d.data);
-        if (r && ((r->sharpened && !app::Get().sharp_2d) || !ReplacementFits(*r, d))) r = nullptr;
+        if (r && ((r->sharpened && !(r->world ? app::Get().world_textures : app::Get().sharp_2d)) || !ReplacementFits(*r, d)))
+            r = nullptr;
         if (VkImageView v = r ? BindReplacement(*r, d, stages.levels[stage]) : VK_NULL_HANDLE) {
             stages.replaced[stage] = true;
             // the game's picture it stands for (uploaded before the pack's was set): what reflections know it by
@@ -6482,6 +6492,7 @@ VkImageView VulkanBackend::BindGuestTexture(const State& s, int stage, const Tex
         }
     }
     if (draw_2d_) Sharpen2D(d);
+    else SharpenWorld(d, s.tss[size_t(stage)][kTssAddressU] == 1, s.tss[size_t(stage)][kTssAddressV] == 1);
     StagePalette palette;
     ReadStagePalette(s, stage, d, palette);
     const uint64_t key = uint64_t(palette.va) << 32 | d.data;
@@ -9196,7 +9207,7 @@ bool VulkanBackend::Acquire(uint32_t& index) {
 #endif
     uint32_t w = 1, h = 1;
     WindowSize(w, h);
-    if (!swap_ || w != bb_w_ || h != bb_h_ || swap_vsync_ != app::Get().vsync || swap_hdr_asked_ != app::Get().hdr) {
+    if (!swap_ || w != bb_w_ || h != bb_h_ || swap_vsync_ != WantVsync() || swap_hdr_asked_ != app::Get().hdr) {
         if (!CreateSwapchain()) return false;
         if (ui_) ImGui_ImplVulkan_SetMinImageCount(2);
     }
@@ -9246,6 +9257,7 @@ void VulkanBackend::Present(const Surface& front) {
     }
     scene_rt_ = scene_ds_ = nullptr;
     post_done_ = false;
+    smaa_ran_ = false;  // a frame whose scene pass does not run has no SMAA to leave FXAA off for
     scene_zwrites_ = 0;
     // ray tracing: the next frame captures from its first vertex, into buffers twice as large after one ran out
     if (rt_full_ && rt_want_ < (16u << 20)) {
@@ -9662,6 +9674,7 @@ void VulkanBackend::ScenePass(Target& rt, Target* ds) {
         if (tone_drawn_) ToneResolve(rt), timed(8);
         if (StylePassWanted()) StylePass(rt, ds), timed(9);
     }
+    smaa_ran_ = false;
     if (app::Get().smaa && Style().mode != kStyleRetro && !TaaWanted() && !UpscaleWanted()) SmaaPass(rt), timed(10);
     if (DofWanted() && one_view) DofPass(rt, ds), timed(11);
     if (Style().motion_blur && Style().mode != kStyleRetro && one_view) MotionBlurPass(rt, ds), timed(19);
@@ -11250,6 +11263,7 @@ void VulkanBackend::SmaaPass(Target& rt) {
     VkImageView bv[2] = {rt.fb.view, rt.smaa_weights.view};
     FullScreen(blend, {rt.res.att, VK_NULL_HANDLE, rt.w, rt.h}, vp, sc, m, 4, bv, 2);
     End();
+    smaa_ran_ = true;
 }
 
 // a timestamp of the frame slot being recorded: 0 frame start, 1 frame end, 2 scene pass start, 3 its end
@@ -11426,10 +11440,7 @@ void VulkanBackend::RescaleTargets() {
 
 std::unique_ptr<Backend> CreateVulkanBackend() { return std::make_unique<VulkanBackend>(); }
 
-#ifndef _WIN32
-// off Windows Vulkan is the renderer (the Direct3D ones are d3d12.cpp's choice on Windows), with nothing to fall back to
+// Vulkan is the renderer on every platform, with nothing to fall back to
 std::unique_ptr<Backend> CreateBackend() { return CreateVulkanBackend(); }
-std::unique_ptr<Backend> CreateFallbackBackend() { return nullptr; }
-#endif
 
 }  // namespace gpu
